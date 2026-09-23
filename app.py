@@ -2,7 +2,9 @@ import csv
 import io
 import re
 from pathlib import Path
+
 import polars as pl
+import streamlit as st
 
 HEADERS = [
     'NE Name',
@@ -44,8 +46,8 @@ def extract_identity_ne(text):
     return identity_match.group(1).strip('"') if identity_match else ''
 
 
-def parse_optlog_csv(raw_text):
-    rows = csv.reader(raw_text.splitlines())
+def parse_optlog_csv(file_content):
+    rows = csv.reader(file_content.splitlines())
     parsed_rows = []
     current_ne = ''
     pending_command = ''
@@ -87,9 +89,9 @@ def parse_optlog_csv(raw_text):
     return parsed_rows
 
 
-def parse_optlog_txt(raw_text):
-    raw_text = raw_text.replace('\xa0', ' ')
-    lines = raw_text.splitlines()
+def parse_optlog_txt(file_content):
+    file_content = file_content.replace('\xa0', ' ')
+    lines = file_content.splitlines()
     rows = []
     current_ne = ''
     pending_command = ''
@@ -138,37 +140,57 @@ def parse_optlog_txt(raw_text):
     return rows
 
 
-def convert_optlog_file(input_path: str, output_path: str = None) -> str:
-    """
-    Mengonversi file OPTLOG (.txt/.csv) ke file Excel (.xlsx)
-    """
-    input_file = Path(input_path)
-    raw_text = input_file.read_text(encoding='utf-8-sig', errors='ignore')
+def process_uploaded_file(uploaded_file):
+    raw_text = uploaded_file.getvalue().decode('utf-8-sig', errors='ignore')
+    filename = uploaded_file.name
 
-    if input_file.suffix.lower() == '.csv':
+    if filename.lower().endswith('.csv'):
         rows = parse_optlog_csv(raw_text)
     else:
         rows = parse_optlog_txt(raw_text)
 
     if not rows:
-        print(f"Tidak ada data valid ditemukan di {input_file.name}")
-        return None
+        return None, 0
 
     df = pl.DataFrame(rows, schema=HEADERS, orient='row')
 
-    if not output_path:
-        output_dir = input_file.parent / 'Hasil_OPTLOG'
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / f"{input_file.stem}_OPTLOG.xlsx"
-
+    excel_buffer = io.BytesIO()
     df.write_excel(
-        workbook=str(output_path),
+        workbook=excel_buffer,
         worksheet='OPTLOG_Data',
         table_style=None,
         header_format={'bold': True, 'text_wrap': False, 'valign': 'vcenter'},
         autofit=True,
         freeze_panes='A2',
     )
+    excel_buffer.seek(0)
 
-    print(f"File berhasil dikonversi ke Excel: {output_path}")
-    return str(output_path)
+    return excel_buffer, len(rows)
+
+
+# Web Interface
+st.set_page_config(page_title="OPTLOG to Excel Converter", page_icon="📊")
+st.title("📊 OPTLOG Converter Online (to XLS/XLSX)")
+st.write("Unggah file OPTLOG (.txt / .csv) untuk dikonversi menjadi file Excel.")
+
+uploaded_files = st.file_uploader(
+    "Pilih file OPTLOG", type=["txt", "csv"], accept_multiple_files=True
+)
+
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        st.subheader(f"📄 {uploaded_file.name}")
+        excel_data, record_count = process_uploaded_file(uploaded_file)
+
+        if excel_data:
+            st.success(f"Berhasil diproses! Total record: **{record_count}**")
+            output_filename = f"{Path(uploaded_file.name).stem}_OPTLOG.xlsx"
+            st.download_button(
+                label=f"📥 Download File Excel ({output_filename})",
+                data=excel_data,
+                file_name=output_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=uploaded_file.name,
+            )
+        else:
+            st.warning("Tidak ada record OPTLOG yang valid ditemukan dalam file ini.")
